@@ -6,8 +6,10 @@ from exoplanet.theano_ops.kepler import KeplerOp
 import matplotlib.pyplot as plt
 from celmech.disturbing_function import get_fg_coeffs
 from IntegrableModelUtils import getOmegaMatrix, calc_DisturbingFunction_with_sinf_cosf
+from IntegrableModelUtils import get_secular_f2_and_f10
 from scipy.optimize import root_scalar
 from warnings import warn
+DEBUG = False
 
 def get_compiled_theano_functions(N_QUAD_PTS):
         # resonance j and k
@@ -203,9 +205,13 @@ class IntegrableResonanceModel():
         self._m1 = m1
         self._m2 = m2
 
-        H_fn,H_flow_vec_fn,H_flow_jac_fn,Zsq_to_J_Eq20_fn,dJ_to_Delta_Eq21_fn,ecc_vars_fn = get_compiled_theano_functions(
-                N_QUAD_PTS=n_quad_pts
-                )
+        if not DEBUG:
+            compiled_functions = get_compiled_theano_functions(N_QUAD_PTS=n_quad_pts)
+        else:
+            compiled_functions = [lambda x: x for _ in range(6)]
+        H_fn,H_flow_vec_fn,H_flow_jac_fn,\
+                Zsq_to_J_Eq20_fn,dJ_to_Delta_Eq21_fn,ecc_vars_fn=compiled_functions
+
         self._H_fn = H_fn
         self._H_flow_vec_fn = H_flow_vec_fn
         self._H_flow_jac_fn = H_flow_jac_fn
@@ -213,10 +219,11 @@ class IntegrableResonanceModel():
         self._dJ_to_Delta_Eq21_fn = dJ_to_Delta_Eq21_fn
         self._ecc_vars_fn = ecc_vars_fn
 
+
     @property
     def extra_args(self):
         return self.m1,self.m2,self.j,self.k,self.f,self.g
-
+    
     @property
     def j(self):
         return self._j
@@ -253,6 +260,20 @@ class IntegrableResonanceModel():
     @m2.setter
     def m2(self,val):
         self._m2 = val
+
+    @property
+    def fTilde(self):
+        mu1 = self.m1 / (1+self.m1)
+        mu2 = self.m2 / (1+self.m2)
+        f = self.f
+        return f * np.sqrt((mu1+mu2) / (np.sqrt(self.alpha)*mu1))
+
+    @property
+    def gTilde(self):
+        mu1 = self.m1 / (1+self.m1)
+        mu2 = self.m2 / (1+self.m2)
+        g = self.g
+        return g * np.sqrt((mu1+mu2)/mu2)
 
     @property
     def Zsq_to_J(self):
@@ -319,7 +340,13 @@ class IntegrableResonanceModel():
         searching in J with theta=\pi.
         Desinged for use with scipy.optimize.root_scalar
         """
-        y = np.array([np.pi / self.k ,0,J,Jstar])
+        if self.k%2:
+            # odd
+            theta_ell = np.pi
+        else:
+            # even
+            theta_ell = np.pi/self.k
+        y = np.array([theta_ell ,0,J,Jstar])
         f = self.flow_vec(y)[0]
         df = self.flow_jac(y)[0,2]
         return f,df
@@ -355,7 +382,13 @@ class IntegrableResonanceModel():
         rt_st = root_scalar(self._elliptic_fp_root_rn,x0=Jstar,args=(Jstar),fprime=True)
         if not rt_st.converged:
             warn( RuntimeWarning("Search for elliptic fixed point did not converge!") )
-        return np.array([np.pi / self.k ,0,rt_st.root,Jstar])   
+        if self.k%2:
+            # odd
+            theta_ell = np.pi
+        else:
+            # even
+            theta_ell = np.pi/self.k
+        return np.array([theta_ell, 0,rt_st.root,Jstar])   
 
     def unstable_fixed_point(self,Jstar):
         """
@@ -380,6 +413,13 @@ class IntegrableResonanceModel():
     @property
     def alpha(self):
         return ((self.j-self.k)/self.j)**(2/3)
+
+    @property
+    def eps(self):
+        Mstar = 1
+        mu1 = self.m1 / (Mstar + self.m1)
+        mu2 = self.m2 / (Mstar + self.m2)
+        return self.m1 * mu2 / (mu1 + mu2) / Mstar
 
     def dyvars_to_orbels(self, dyvars, P2=1, Q=0,l1 = 0):
         """
@@ -449,3 +489,54 @@ class IntegrableResonanceModel():
             P,e,l,w = els
             sim.add(m=[m1,m2][i],P=P,e=e,l=l,pomega=w,hash="planet{}".format(i))
         return sim
+    def secular_coeffs(self):
+        """
+        Return coefficients a_s,b_s, and c_s appearing in the
+        secular Hamiltonian (Eq 25).
+        """
+        # Calculate matrices appearing in B7-B9
+        mu1 = self.m1 / (1+self.m1)
+        mu2 = self.m2 / (1+self.m2)
+        fTilde = self.fTilde
+        gTilde = self.gTilde
+        ang = np.arctan2(gTilde,fTilde)
+        c,s = np.cos(ang),np.sin(ang)
+        M2 = np.array([[c,-s],[s,c]])
+        M1 = np.array([
+            [np.sqrt((mu1+mu2)/(mu1*np.sqrt(self.alpha))), 0 ],
+            [0,np.sqrt((mu1+mu2)  / mu2)]
+        ])
+        M = M1.dot(M2)
+        f2,f10 = get_secular_f2_and_f10(self.alpha)
+        Smtrx = np.array([[f2,f10/2],[f10/2,f2]])
+        # Coefficients a_s,b_s, and c_s defined in Eq. B11
+        Q = 2 * np.transpose(M).dot( Smtrx.dot(M) )
+        a_s = Q[0,0]
+        b_s = Q[1,1]
+        c_s = Q[0,1] + Q[1,0]
+        return a_s,b_s,c_s
+    def get_z1z2Z_from_zfrac(self,zfrac,W=0):
+        """
+        Get 'Z' and planets' complex eccentricities by 
+        specifiying Z/Zcross (and W).
+
+        Arguments
+        ---------
+        zfrac : float
+            Set Z = Z_cross * zfrac
+        W : float, optional
+            Defaults to 0
+
+        Returns
+        -------
+        z1,z2,Z : tuple of floats
+        """
+        
+        alpha = self.alpha
+        f,g=self.f,self.g
+        X = np.sqrt(f*f+g*g)
+        Zcross =  (X - f * W - alpha * X - g * W * alpha) / (g-f*alpha)
+        Z = zfrac * Zcross
+        z1 = (f * Z - g * W) / X
+        z2 = (f * W + g * Z) / X
+        return z1,z2,Z

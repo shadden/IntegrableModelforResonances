@@ -89,3 +89,41 @@ def calc_DisturbingFunction_with_sinf_cosf(alpha,e1,e2,w1,w2,sinf1,cosf1,sinf2,c
     indirect = -1 * r1dotr * r1_3
 
     return direct+indirect
+
+# Secular Hamiltonian coefficients evaluated at alpha=a1/a2
+from celmech.disturbing_function import laplace_B
+def get_secular_f2_and_f10(alpha):
+    """
+    Calculate f_{2} and f_{10}, the combinations
+    Laplace coefficients that appear in the secular
+    disturbing function at second order in eccentricity:
+    ..math::
+        R_\text{sec} = f_2\left(e_1^2 + e_2^2\right) +
+                        f_{10} e_1 e_2\cos(\varpi_2-\varpi_1)
+    
+    Arguments
+    ---------
+    alpha : float
+        The semi-major axis ratio.
+    
+    Returns
+    -------
+    f2 : float
+    f10 : float
+    """
+    b01 = laplace_B.eval(1/2,0,1,alpha)
+    b02 = laplace_B.eval(1/2,0,2,alpha)
+    
+    b10 = laplace_B.eval(1/2,1,0,alpha)
+    b11 = laplace_B.eval(1/2,1,1,alpha)
+    b12 = laplace_B.eval(1/2,1,2,alpha)
+    
+    
+    
+    f2 = 0.25 * alpha * b01 + 0.125 * alpha * alpha * b02
+    f10 = 0.5 * b10 - 0.5 * alpha * b11 - 0.25 * alpha * alpha * b12
+    
+    return f2,f10
+
+
+ 
