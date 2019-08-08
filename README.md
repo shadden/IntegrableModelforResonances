@@ -7,6 +7,7 @@ The code requries a few special python packages (in addition to numpy and scipy)
   - `exoplanet`
   - `celmech`
   - `rebound`
-All packages can be installed using:
+  
+All packages can be installed with:
 
   `pip install [PACKAGE]`
