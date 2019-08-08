@@ -1,3 +1,4 @@
+import rebound
 import numpy as np
 import theano
 import theano.tensor as T
@@ -163,11 +164,20 @@ def get_compiled_theano_functions(j,k,f,g,N_QUAD_PTS,DEFAULT_MASS):
 
         # Some convenience functions...
         Zsq_to_J_Eq20 = (f*f + g*g) / (fTilde*fTilde + gTilde*gTilde)
-        dJ_to_Delta_Eq21 = 1.5 * (mu1+mu2) * (j * mu1*T.sqrt(alpha) + (j-k) * mu2) / (2*k*T.sqrt(alpha)*mu1*mu2)
+        dJ_to_Delta_Eq21 = 1.5 * (mu1+mu2) * (j * mu1*T.sqrt(alpha) + (j-k) * mu2) / (k * T.sqrt(alpha) * mu1 * mu2)
+        # canonical_variable_rotation_Eq15 = T.stacklists([[fTilde,gTilde],[-gTilde,fTilde]]) / T.sqrt(fTilde*fTilde + gTilde*gTilde)
+        ecc_vars_fn = theano.function(inputs=[dyvars,m1,m2],outputs=[e1,w1,e2,w2])
         
         Zsq_to_J_Eq20_fn =theano.function(inputs=[m1,m2],outputs = Zsq_to_J_Eq20 )
         dJ_to_Delta_Eq21_fn = theano.function(inputs=[m1,m2],outputs = dJ_to_Delta_Eq21 )
-        return H_fn,H_flow_vec_fn,H_flow_jac_fn,Zsq_to_J_Eq20_fn,dJ_to_Delta_Eq21_fn
+        #canonical_variable_rotation_Eq15_fn =theano.function(inputs=[m1,m2],outputs = canonical_variable_rotation_Eq15 )
+        return (H_fn,
+                H_flow_vec_fn,
+                H_flow_jac_fn,
+                Zsq_to_J_Eq20_fn,
+                dJ_to_Delta_Eq21_fn,
+                ecc_vars_fn
+                )
 
 class IntegrableResonanceModel():
     """
@@ -192,7 +202,7 @@ class IntegrableResonanceModel():
         self.g = g
         self.default_mass = default_mass
 
-        H_fn,H_flow_vec_fn,H_flow_jac_fn,Zsq_to_J_Eq20_fn,dJ_to_Delta_Eq21_fn = get_compiled_theano_functions(
+        H_fn,H_flow_vec_fn,H_flow_jac_fn,Zsq_to_J_Eq20_fn,dJ_to_Delta_Eq21_fn,ecc_vars_fn = get_compiled_theano_functions(
                 j,k,f,g,
                 N_QUAD_PTS=n_quad_pts,
                 DEFAULT_MASS = default_mass
@@ -202,6 +212,8 @@ class IntegrableResonanceModel():
         self._H_flow_jac_fn = H_flow_jac_fn
         self._Zsq_to_J_Eq20_fn = Zsq_to_J_Eq20_fn 
         self._dJ_to_Delta_Eq21_fn = dJ_to_Delta_Eq21_fn
+        #self._canonical_variable_rotation_Eq15_fn = canonical_variable_rotation_Eq15_fn
+        self._ecc_vars_fn = ecc_vars_fn
 
     def Zsq_to_J(self,**kwargs):
         m1 = kwargs.get('m1',self.default_mass)
@@ -354,3 +366,86 @@ class IntegrableResonanceModel():
         if not rt_unst.converged:
             warn( RuntimeWarning("Search for elliptic fixed point did not converge!") )
         return np.array([0,0,rt_unst.root,Jstar])   
+
+    @property
+    def alpha(self):
+        return ((self.j-self.k)/self.j)**(2/3)
+
+    def dyvars_to_orbels(self, dyvars, P2=1, Q=0,l1 = 0,  **kwargs):
+        """
+        Convert dynamical variables to orbital elements.
+
+        Arguemnts
+        ---------
+        dyvars : ndarray, shape (4,)
+            Vector of the full phase space variables:
+                dyvars = [theta,theta*,J,J*]
+        P2 : float, optional
+            Period of outer planet. 
+            Default is P2=1
+        Q : float, optional
+            Value of angular variable Q=j*l2 - (j-k) l1. 
+            Default is Q=0
+        l1 : float, optional
+            Value of inner planet's mean longitude
+            Default is l1=0
+        m1 : float, optional
+            inner planet mass
+        m2 : float, optional
+            inner planet mass
+
+        Returns
+        -------
+        ndarray, shape (2,4)
+            Orbital elements for the pair of resonant planets.
+            Format is:
+                [ [P1,e1,l1,w1] , [P2,e2,l2,w2] ]
+        Note
+        ----
+        Orbital elements are computed assuming W=0. 
+        """
+        m1 = kwargs.get('m1',self.default_mass)
+        m2 = kwargs.get('m2',self.default_mass)
+        theta,theta_star,J,Jstar = dyvars
+        e1,w1,e2,w2 = self._ecc_vars_fn(dyvars,m1,m2)
+        Delta = self.dJ_to_Delta(m1=m1,m2=m2) * (J-Jstar)
+        P1 = (self.j-self.k) * P2  / ( self.j *  (1+Delta) )
+        l2 = np.mod( (Q + (self.j-self.k) * l1) / self.j  ,2*np.pi) 
+        return np.array( [ [P1,e1,l1,w1] , [P2,e2,l2,w2] ])
+
+    def dyvars_to_rebound_sim(self, dyvars, P2=1, Q=0,l1 = 0,  **kwargs):
+        """
+        Initialize a rebound simulation from a set of dynamical variables.
+
+        Arguemnts
+        ---------
+        dyvars : ndarray, shape (4,)
+            Vector of the full phase space variables:
+                dyvars = [theta,theta*,J,J*]
+        P2 : float, optional
+            Period of outer planet. 
+            Default is P2=1
+        Q : float, optional
+            Value of angular variable Q=j*l2 - (j-k) l1. 
+            Default is Q=0
+        l1 : float, optional
+            Value of inner planet's mean longitude
+            Default is l1=0
+        m1 : float, optional
+            inner planet mass
+        m2 : float, optional
+            inner planet mass
+
+        Returns
+        -------
+        rebound.Simulation object
+        """
+        m1 = kwargs.get('m1',self.default_mass)
+        m2 = kwargs.get('m2',self.default_mass)
+        sim = rebound.Simulation()
+        sim.add(m=1,hash="star")
+        orbels = self.dyvars_to_orbels(dyvars, P2=1, Q=0,l1 = 0,  **kwargs)
+        for i,els in enumerate(orbels):
+            P,e,l,w = els
+            sim.add(m=[m1,m2][i],P=P,e=e,l=l,pomega=w,hash="planet{}".format(i))
+        return sim
