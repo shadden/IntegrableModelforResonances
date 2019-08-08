@@ -9,9 +9,15 @@ from IntegrableModelUtils import getOmegaMatrix, calc_DisturbingFunction_with_si
 from scipy.optimize import root_scalar
 from warnings import warn
 
-def get_compiled_theano_functions(j,k,f,g,N_QUAD_PTS,DEFAULT_MASS):
+def get_compiled_theano_functions(N_QUAD_PTS):
+        # resonance j and k
+        j,k = T.lscalars('jk')
+
         # Planet masses: m1,m2
         m1,m2 = T.dscalars(2)
+
+        # resonance f and g coefficients
+        f,g = T.dscalars(2)
         
         # Planet and star mass variables
         Mstar = 1
@@ -127,11 +133,8 @@ def get_compiled_theano_functions(j,k,f,g,N_QUAD_PTS,DEFAULT_MASS):
         
         
         # 'ins' will set the inputs of Theano functions compiled below
-        ins = [
-                dyvars,
-                theano.In(m1,name="m1",value=DEFAULT_MASS),
-                theano.In(m2,name="m2",value=DEFAULT_MASS)
-              ]
+        extra_ins = [m1,m2,j,k,f,g]
+        ins = [dyvars] + extra_ins
         
         # 'givens' will fix some parameters of Theano functions compiled below
         givens=[
@@ -161,16 +164,13 @@ def get_compiled_theano_functions(j,k,f,g,N_QUAD_PTS,DEFAULT_MASS):
             outputs=H_flow_jac,
             givens=givens
         )
-
+        
         # Some convenience functions...
         Zsq_to_J_Eq20 = (f*f + g*g) / (fTilde*fTilde + gTilde*gTilde)
         dJ_to_Delta_Eq21 = 1.5 * (mu1+mu2) * (j * mu1*T.sqrt(alpha) + (j-k) * mu2) / (k * T.sqrt(alpha) * mu1 * mu2)
-        # canonical_variable_rotation_Eq15 = T.stacklists([[fTilde,gTilde],[-gTilde,fTilde]]) / T.sqrt(fTilde*fTilde + gTilde*gTilde)
-        ecc_vars_fn = theano.function(inputs=[dyvars,m1,m2],outputs=[e1,w1,e2,w2])
-        
-        Zsq_to_J_Eq20_fn =theano.function(inputs=[m1,m2],outputs = Zsq_to_J_Eq20 )
-        dJ_to_Delta_Eq21_fn = theano.function(inputs=[m1,m2],outputs = dJ_to_Delta_Eq21 )
-        #canonical_variable_rotation_Eq15_fn =theano.function(inputs=[m1,m2],outputs = canonical_variable_rotation_Eq15 )
+        ecc_vars_fn = theano.function(inputs=ins, outputs=[e1,w1,e2,w2], on_unused_input='ignore')
+        Zsq_to_J_Eq20_fn =theano.function(inputs=extra_ins,outputs = Zsq_to_J_Eq20, on_unused_input='ignore')
+        dJ_to_Delta_Eq21_fn = theano.function(inputs=extra_ins, outputs = dJ_to_Delta_Eq21, on_unused_input='ignore')
         return (H_fn,
                 H_flow_vec_fn,
                 H_flow_jac_fn,
@@ -194,37 +194,77 @@ class IntegrableResonanceModel():
         Default value of planet mass to use when
         not specified.
     """
-    def __init__(self,j,k, n_quad_pts = 40, default_mass = 1e-5):
+    def __init__(self,j,k, n_quad_pts = 40, m1 = 1e-5 , m2 = 1e-5):
         f,g = get_fg_coeffs(j,k)
-        self.j = j
-        self.k = k
-        self.f = f
-        self.g = g
-        self.default_mass = default_mass
+        self._j = j
+        self._k = k
+        self._f = f
+        self._g = g
+        self._m1 = m1
+        self._m2 = m2
 
         H_fn,H_flow_vec_fn,H_flow_jac_fn,Zsq_to_J_Eq20_fn,dJ_to_Delta_Eq21_fn,ecc_vars_fn = get_compiled_theano_functions(
-                j,k,f,g,
-                N_QUAD_PTS=n_quad_pts,
-                DEFAULT_MASS = default_mass
+                N_QUAD_PTS=n_quad_pts
                 )
         self._H_fn = H_fn
         self._H_flow_vec_fn = H_flow_vec_fn
         self._H_flow_jac_fn = H_flow_jac_fn
         self._Zsq_to_J_Eq20_fn = Zsq_to_J_Eq20_fn 
         self._dJ_to_Delta_Eq21_fn = dJ_to_Delta_Eq21_fn
-        #self._canonical_variable_rotation_Eq15_fn = canonical_variable_rotation_Eq15_fn
         self._ecc_vars_fn = ecc_vars_fn
 
-    def Zsq_to_J(self,**kwargs):
-        m1 = kwargs.get('m1',self.default_mass)
-        m2 = kwargs.get('m2',self.default_mass)
-        return self._Zsq_to_J_Eq20_fn(m1,m2)
-    def dJ_to_Delta(self,**kwargs):
-        m1 = kwargs.get('m1',self.default_mass)
-        m2 = kwargs.get('m2',self.default_mass)
-        return self._dJ_to_Delta_Eq21_fn(m1,m2)
+    @property
+    def extra_args(self):
+        return self.m1,self.m2,self.j,self.k,self.f,self.g
 
-    def H(self,y,**kwargs):
+    @property
+    def j(self):
+        return self._j
+    @j.setter
+    def j(self,val):
+        self._f,self._g = get_fg_coeffs(val,self.k)
+        self._j = val
+
+    @property
+    def k(self):
+        return self._k
+    @k.setter
+    def k(self,val):
+        self._f,self._g = get_fg_coeffs(self.j,val)
+        self._k = val
+
+    @property
+    def f(self):
+        return self._f
+    @property
+    def g(self):
+        return self._g
+
+    @property
+    def m1(self):
+        return self._m1
+    @m1.setter
+    def m1(self,val):
+        self._m1 = val
+
+    @property
+    def m2(self):
+        return self._m2
+    @m2.setter
+    def m2(self,val):
+        self._m2 = val
+
+    @property
+    def Zsq_to_J(self):
+        args = self.extra_args
+        return self._Zsq_to_J_Eq20_fn(*args)
+
+    @property
+    def dJ_to_Delta(self):
+        args = self.extra_args
+        return self._dJ_to_Delta_Eq21_fn(*args)
+
+    def H(self,y):
         """
         Calculate the value of the Hamiltonian
 
@@ -232,20 +272,14 @@ class IntegrableResonanceModel():
         ---------
         y : array_like
             Dynamical variables {theta,theta*,J,J*}
-        m1 : float, optional
-            Inner planet mass
-        m2 : float, optional
-            Outer planet mass
 
         Returns
         -------
         float
         """
-        m1 = kwargs.get('m1',self.default_mass)
-        m2 = kwargs.get('m2',self.default_mass)
-        return self._H_fn(y,m1,m2)
+        return self._H_fn(y,*self.extra_args)
 
-    def flow_vec(self,y,**kwargs):
+    def flow_vec(self,y):
         """
         Calculate the flow vector of the equations of motion
         generated by the the Hamiltonian.
@@ -254,20 +288,14 @@ class IntegrableResonanceModel():
         ---------
         y : array_like
             Dynamical variables {theta,theta*,J,J*}
-        m1 : float, optional
-            Inner planet mass
-        m2 : float, optional
-            Outer planet mass
 
         Returns
         -------
         ndarray, shape (4,)
         """
-        m1 = kwargs.get('m1',self.default_mass)
-        m2 = kwargs.get('m2',self.default_mass)
-        return self._H_flow_vec_fn(y,m1,m2)
+        return self._H_flow_vec_fn(y,*self.extra_args)
 
-    def flow_jac(self,y,**kwargs):
+    def flow_jac(self,y):
         """
         Calculate the Jacobian of the equations of motion
         generated by the the Hamiltonian with respect to the 
@@ -277,20 +305,14 @@ class IntegrableResonanceModel():
         ---------
         y : array_like
             Dynamical variables {theta,theta*,J,J*}
-        m1 : float, optional
-            Inner planet mass
-        m2 : float, optional
-            Outer planet mass
 
         Returns
         -------
         ndarray, shape (4,4)
         """
-        m1 = kwargs.get('m1',self.default_mass)
-        m2 = kwargs.get('m2',self.default_mass)
-        return  self._H_flow_jac_fn(y,m1,m2)
+        return  self._H_flow_jac_fn(y,*self.extra_args)
 
-    def _elliptic_fp_root_rn(self,J,Jstar,m1,m2):
+    def _elliptic_fp_root_rn(self,J,Jstar):
         """
         Convenience function to look for the elliptic fixed point by finding
             dtheta/dt = 0
@@ -298,11 +320,11 @@ class IntegrableResonanceModel():
         Desinged for use with scipy.optimize.root_scalar
         """
         y = np.array([np.pi / self.k ,0,J,Jstar])
-        f = self.flow_vec(y,m1=m1,m2=m2)[0]
-        df = self.flow_jac(y,m1=m1,m2=m2)[0,2]
+        f = self.flow_vec(y)[0]
+        df = self.flow_jac(y)[0,2]
         return f,df
 
-    def _unstable_fp_root_rn(self,J,Jstar,m1,m2):
+    def _unstable_fp_root_rn(self,J,Jstar):
         """
         Convenience function to look for the unstable root by finding
             dtheta/dt = 0
@@ -311,11 +333,11 @@ class IntegrableResonanceModel():
         Desinged for use with scipy.optimize.root_scalar
         """
         y = np.array([0,0,J,Jstar])
-        f = self.flow_vec(y,m1=m1,m2=m2)[0]
-        df = self.flow_jac(y,m1=m1,m2=m2)[0,2]
+        f = self.flow_vec(y)[0]
+        df = self.flow_jac(y)[0,2]
         return f,df
 
-    def elliptic_fixed_point(self,Jstar,**kwargs):
+    def elliptic_fixed_point(self,Jstar):
         """
         Locate the elliptic fixed point of the system for a given value of J^*.
 
@@ -323,10 +345,6 @@ class IntegrableResonanceModel():
         ---------
         Jstar : float
             Value of J^*
-        m1 : float, optional
-            inner planet mass
-        m2 : float, optional
-            inner planet mass
 
         Returns
         -------
@@ -334,14 +352,12 @@ class IntegrableResonanceModel():
             Vector of the full phase space variables (theta,theta*,J,J*) at
             the fixed point.  theta* is set to 0.
         """
-        m1 = kwargs.get('m1',self.default_mass)
-        m2 = kwargs.get('m2',self.default_mass)
-        rt_st = root_scalar(self._elliptic_fp_root_rn,x0=Jstar,args=(Jstar,m1,m2),fprime=True)
+        rt_st = root_scalar(self._elliptic_fp_root_rn,x0=Jstar,args=(Jstar),fprime=True)
         if not rt_st.converged:
             warn( RuntimeWarning("Search for elliptic fixed point did not converge!") )
         return np.array([np.pi / self.k ,0,rt_st.root,Jstar])   
 
-    def unstable_fixed_point(self,Jstar,**kwargs):
+    def unstable_fixed_point(self,Jstar):
         """
         Locate the unstable fixed point of the systemfor a given value of J^*.
 
@@ -349,10 +365,6 @@ class IntegrableResonanceModel():
         ---------
         Jstar : float
             Value of J^*
-        m1 : float, optional
-            inner planet mass
-        m2 : float, optional
-            inner planet mass
 
         Returns
         -------
@@ -360,9 +372,7 @@ class IntegrableResonanceModel():
             Vector of the full phase space variables (theta,theta*,J,J*) at
             the fixed point.  theta* is set to 0.
         """
-        m1 = kwargs.get('m1',self.default_mass)
-        m2 = kwargs.get('m2',self.default_mass)
-        rt_unst = root_scalar(self._unstable_fp_root_rn,x0=Jstar,args=(Jstar,m1,m2),fprime=True)
+        rt_unst = root_scalar(self._unstable_fp_root_rn,x0=Jstar,args=(Jstar),fprime=True)
         if not rt_unst.converged:
             warn( RuntimeWarning("Search for elliptic fixed point did not converge!") )
         return np.array([0,0,rt_unst.root,Jstar])   
@@ -371,7 +381,7 @@ class IntegrableResonanceModel():
     def alpha(self):
         return ((self.j-self.k)/self.j)**(2/3)
 
-    def dyvars_to_orbels(self, dyvars, P2=1, Q=0,l1 = 0,  **kwargs):
+    def dyvars_to_orbels(self, dyvars, P2=1, Q=0,l1 = 0):
         """
         Convert dynamical variables to orbital elements.
 
@@ -389,10 +399,6 @@ class IntegrableResonanceModel():
         l1 : float, optional
             Value of inner planet's mean longitude
             Default is l1=0
-        m1 : float, optional
-            inner planet mass
-        m2 : float, optional
-            inner planet mass
 
         Returns
         -------
@@ -404,16 +410,14 @@ class IntegrableResonanceModel():
         ----
         Orbital elements are computed assuming W=0. 
         """
-        m1 = kwargs.get('m1',self.default_mass)
-        m2 = kwargs.get('m2',self.default_mass)
         theta,theta_star,J,Jstar = dyvars
-        e1,w1,e2,w2 = self._ecc_vars_fn(dyvars,m1,m2)
-        Delta = self.dJ_to_Delta(m1=m1,m2=m2) * (J-Jstar)
+        e1,w1,e2,w2 = self._ecc_vars_fn(dyvars,*self.extra_args)
+        Delta = self.dJ_to_Delta * (J-Jstar)
         P1 = (self.j-self.k) * P2  / ( self.j *  (1+Delta) )
         l2 = np.mod( (Q + (self.j-self.k) * l1) / self.j  ,2*np.pi) 
         return np.array( [ [P1,e1,l1,w1] , [P2,e2,l2,w2] ])
 
-    def dyvars_to_rebound_sim(self, dyvars, P2=1, Q=0,l1 = 0,  **kwargs):
+    def dyvars_to_rebound_sim(self, dyvars, P2=1, Q=0,l1 = 0):
         """
         Initialize a rebound simulation from a set of dynamical variables.
 
@@ -431,20 +435,16 @@ class IntegrableResonanceModel():
         l1 : float, optional
             Value of inner planet's mean longitude
             Default is l1=0
-        m1 : float, optional
-            inner planet mass
-        m2 : float, optional
-            inner planet mass
 
         Returns
         -------
         rebound.Simulation object
         """
-        m1 = kwargs.get('m1',self.default_mass)
-        m2 = kwargs.get('m2',self.default_mass)
+        m1 = self.m1
+        m2 = self.m2
         sim = rebound.Simulation()
         sim.add(m=1,hash="star")
-        orbels = self.dyvars_to_orbels(dyvars, P2=1, Q=0,l1 = 0,  **kwargs)
+        orbels = self.dyvars_to_orbels(dyvars, P2=1, Q=0,l1 = 0)
         for i,els in enumerate(orbels):
             P,e,l,w = els
             sim.add(m=[m1,m2][i],P=P,e=e,l=l,pomega=w,hash="planet{}".format(i))
