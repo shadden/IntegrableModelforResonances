@@ -421,7 +421,7 @@ class IntegrableResonanceModel():
         mu2 = self.m2 / (Mstar + self.m2)
         return self.m1 * mu2 / (mu1 + mu2) / Mstar
 
-    def dyvars_to_orbels(self, dyvars, P2=1, Q=0,l1 = 0):
+    def dyvars_to_orbels(self, dyvars, P2=1, Q=0,l1 = 0, W = 0, w = 0):
         """
         Convert dynamical variables to orbital elements.
 
@@ -452,12 +452,18 @@ class IntegrableResonanceModel():
         """
         theta,theta_star,J,Jstar = dyvars
         e1,w1,e2,w2 = self._ecc_vars_fn(dyvars,*self.extra_args)
+        if not np.isclose(W,0):
+            WexpIw = W * np.exp(1j * w)
+            z1 = e1 * np.exp(1j * w1) - self.g * WexpIw  / np.sqrt(self.f**2 + self.g**2)
+            z2 = e2 * np.exp(1j * w2) + self.f * WexpIw  / np.sqrt(self.f**2 + self.g**2)
+            e1,w1 = np.abs(z1),np.angle(z1)
+            e2,w2 = np.abs(z2),np.angle(z2)
         Delta = self.dJ_to_Delta * (J-Jstar)
         P1 = (self.j-self.k) * P2  / ( self.j *  (1+Delta) )
         l2 = np.mod( (Q + (self.j-self.k) * l1) / self.j  ,2*np.pi) 
         return np.array( [ [P1,e1,l1,w1] , [P2,e2,l2,w2] ])
 
-    def dyvars_to_rebound_sim(self, dyvars, P2=1, Q=0,l1 = 0):
+    def dyvars_to_rebound_sim(self, dyvars, P2=1, Q=0,l1 = 0,W = 0, w = 0):
         """
         Initialize a rebound simulation from a set of dynamical variables.
 
@@ -484,7 +490,7 @@ class IntegrableResonanceModel():
         m2 = self.m2
         sim = rebound.Simulation()
         sim.add(m=1,hash="star")
-        orbels = self.dyvars_to_orbels(dyvars, P2=1, Q=0,l1 = 0)
+        orbels = self.dyvars_to_orbels(dyvars, P2 = P2, Q = Q, l1 = l1, W = W , w = w)
         for i,els in enumerate(orbels):
             P,e,l,w = els
             sim.add(m=[m1,m2][i],P=P,e=e,l=l,pomega=w,hash="planet{}".format(i))
