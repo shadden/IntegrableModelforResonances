@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 from celmech.disturbing_function import get_fg_coeffs
 from IntegrableModelUtils import getOmegaMatrix, calc_DisturbingFunction_with_sinf_cosf
 from IntegrableModelUtils import get_secular_f2_and_f10
-from scipy.optimize import root_scalar
+from scipy.optimize import root_scalar,root
 from warnings import warn
 DEBUG = False
 
@@ -148,24 +148,27 @@ def get_compiled_theano_functions(N_QUAD_PTS):
         # Compile Theano functions
         ##########################
         
-        # Note that this may take a while...
-        H_fn = theano.function(
-            inputs=ins,
-            outputs=H,
-            givens=givens
-        )
-        
-        H_flow_vec_fn = theano.function(
-            inputs=ins,
-            outputs=H_flow_vec,
-            givens=givens
-        )
-        
-        H_flow_jac_fn = theano.function(
-            inputs=ins,
-            outputs=H_flow_jac,
-            givens=givens
-        )
+        if not DEBUG:
+            # Note that this may take a while...
+            H_fn = theano.function(
+                inputs=ins,
+                outputs=H,
+                givens=givens
+            )
+            
+            H_flow_vec_fn = theano.function(
+                inputs=ins,
+                outputs=H_flow_vec,
+                givens=givens
+            )
+            
+            H_flow_jac_fn = theano.function(
+                inputs=ins,
+                outputs=H_flow_jac,
+                givens=givens
+            )
+        else:
+            H_fn,H_flow_vec_fn,H_flow_jac_fn = [lambda x: x for _ in range(3)]
         
         # Some convenience functions...
         Zsq_to_J_Eq20 = (f*f + g*g) / (fTilde*fTilde + gTilde*gTilde)
@@ -188,13 +191,38 @@ class IntegrableResonanceModel():
 
     Attributes
     ----------
+    j : int
+        Together with k specifies j:j-k resonance
+    
+    k : int
+        Order of resonance.
+    
     f : float
         Coefficient appearing in Equation 11
+
     g : float
         Coefficient appearing in Equation 11
-    default_mass  : float
-        Default value of planet mass to use when
-        not specified.
+
+    alpha : float
+        Semi-major axis ratio a_1/a_2
+
+    eps : float
+        Mass parameter m1*mu2 / (mu1+mu2)
+
+    m1 : float
+        Inner planet mass
+
+    m2 : float
+        Outer planet mass
+
+    Zsq_to_J : float
+        Conversion factor from Z^2 to canonical variable J.
+        See Equation 20.
+    
+    dJ_to_Delta : float
+        Conversion factor from (J-J^*) to Delta = (j-k)P_2 /j P_1 - 1.
+        See Equation 21.
+
     """
     def __init__(self,j,k, n_quad_pts = 40, m1 = 1e-5 , m2 = 1e-5):
         f,g = get_fg_coeffs(j,k)
@@ -205,10 +233,8 @@ class IntegrableResonanceModel():
         self._m1 = m1
         self._m2 = m2
 
-        if not DEBUG:
-            compiled_functions = get_compiled_theano_functions(N_QUAD_PTS=n_quad_pts)
-        else:
-            compiled_functions = [lambda x: x for _ in range(6)]
+        compiled_functions = get_compiled_theano_functions(N_QUAD_PTS=n_quad_pts)
+
         H_fn,H_flow_vec_fn,H_flow_jac_fn,\
                 Zsq_to_J_Eq20_fn,dJ_to_Delta_Eq21_fn,ecc_vars_fn=compiled_functions
 
@@ -421,7 +447,8 @@ class IntegrableResonanceModel():
         mu2 = self.m2 / (Mstar + self.m2)
         return self.m1 * mu2 / (mu1 + mu2) / Mstar
 
-    def dyvars_to_orbels(self, dyvars, P2=1, Q=0,l1 = 0, W = 0, w = 0):
+
+    def dyvars_to_orbels(self, dyvars, P2=1, Q=0,l1 = 0, W = 0):
         """
         Convert dynamical variables to orbital elements.
 
@@ -439,6 +466,9 @@ class IntegrableResonanceModel():
         l1 : float, optional
             Value of inner planet's mean longitude
             Default is l1=0
+        W : float, optional
+            value of eccentricity-like variable W.
+            See Equation 13.
 
         Returns
         -------
@@ -451,19 +481,52 @@ class IntegrableResonanceModel():
         Orbital elements are computed assuming W=0. 
         """
         theta,theta_star,J,Jstar = dyvars
+        Delta = self.dJ_to_Delta * (J-Jstar)
+        P1 = (self.j-self.k) * P2  / ( self.j *  (1+Delta) )
+        l2 = np.mod( (Q + (self.j-self.k) * l1) / self.j  ,2*np.pi) 
         e1,w1,e2,w2 = self._ecc_vars_fn(dyvars,*self.extra_args)
         if not np.isclose(W,0):
+            phi = theta - Q/self.k
+            psi = -1 * theta_star - Q/self.k
+            Phi = J 
+            f = self.f
+            g = self.g
+            Z = np.sqrt(J / self.Zsq_to_J)
+            z = -1*phi
+
+            # (Phi,Psi) to z1,z2
+            M = self._get_M_matrix()
+
+            # (z1,z2) to (Z,W)
+            z1z2_to_ZW = np.array([[f,g],[-g,f]]) / np.sqrt(f*f+g*g)
+
+            # (Phi,Psi) to (Z,W)
+            PhiPsi_to_ZW = z1z2_to_ZW.dot(M)
+
+            # (Z,W) to (Phi,Psi)
+            ZW_to_PhiPsi = np.linalg.inv(PhiPsi_to_ZW)
+
+            # sqrt(Psi) * exp[i psi] = a * Ze^{-iz} + b * We^{-iw}
+            a,b = ZW_to_PhiPsi[1]
+            coszpsi = np.cos(z+psi)
+            cos2zpsi = np.cos(2*(z+psi))
+            disc = 4*b*b*W*W - 2*a*a*Z*Z * ( 1 - cos2zpsi )
+            disc = np.abs(disc)
+            Psi = b*b*W*W + a*a*Z*Z*cos2zpsi + a*Z*coszpsi*np.sqrt(disc)
+            if Psi>0:
+                w = -1*np.angle(( np.sqrt(Psi)*np.exp(1j*psi) - a * Z *np.exp(-1j*z))/b )
+            else:
+                Psi = -1*Psi
+                w = -1*np.angle(( 1j*np.sqrt(Psi)*np.exp(1j*psi) - a * Z *np.exp(-1j*z))/b)
+                
             WexpIw = W * np.exp(1j * w)
             z1 = e1 * np.exp(1j * w1) - self.g * WexpIw  / np.sqrt(self.f**2 + self.g**2)
             z2 = e2 * np.exp(1j * w2) + self.f * WexpIw  / np.sqrt(self.f**2 + self.g**2)
             e1,w1 = np.abs(z1),np.angle(z1)
             e2,w2 = np.abs(z2),np.angle(z2)
-        Delta = self.dJ_to_Delta * (J-Jstar)
-        P1 = (self.j-self.k) * P2  / ( self.j *  (1+Delta) )
-        l2 = np.mod( (Q + (self.j-self.k) * l1) / self.j  ,2*np.pi) 
         return np.array( [ [P1,e1,l1,w1] , [P2,e2,l2,w2] ])
 
-    def dyvars_to_rebound_sim(self, dyvars, P2=1, Q=0,l1 = 0,W = 0, w = 0):
+    def dyvars_to_rebound_sim(self, dyvars, P2=1, Q=0,l1 = 0,W = 0):
         """
         Initialize a rebound simulation from a set of dynamical variables.
 
@@ -490,21 +553,21 @@ class IntegrableResonanceModel():
         m2 = self.m2
         sim = rebound.Simulation()
         sim.add(m=1,hash="star")
-        orbels = self.dyvars_to_orbels(dyvars, P2 = P2, Q = Q, l1 = l1, W = W , w = w)
+        orbels = self.dyvars_to_orbels(dyvars, P2 = P2, Q = Q, l1 = l1, W = W )
         for i,els in enumerate(orbels):
             P,e,l,w = els
             sim.add(m=[m1,m2][i],P=P,e=e,l=l,pomega=w,hash="planet{}".format(i))
         return sim
-    def secular_coeffs(self):
+    def _get_M_matrix(self):
         """
-        Return coefficients a_s,b_s, and c_s appearing in the
-        secular Hamiltonian (Eq 25).
+        Convenience function that returns the 'M' matrix defined in Appendix B.
+        .. math::
+            (z1^*,z2^*) = M \cdot (\sqrt{\Phi}e^{i\phi}, \sqrt{\Psi}e^{i\psi})
         """
-        # Calculate matrices appearing in B7-B9
-        mu1 = self.m1 / (1+self.m1)
-        mu2 = self.m2 / (1+self.m2)
         fTilde = self.fTilde
         gTilde = self.gTilde
+        mu1 = self.m1 / (1+self.m1)
+        mu2 = self.m2 / (1+self.m2)
         ang = np.arctan2(gTilde,fTilde)
         c,s = np.cos(ang),np.sin(ang)
         M2 = np.array([[c,-s],[s,c]])
@@ -513,6 +576,14 @@ class IntegrableResonanceModel():
             [0,np.sqrt((mu1+mu2)  / mu2)]
         ])
         M = M1.dot(M2)
+        return M
+    def secular_coeffs(self):
+        """
+        Return coefficients a_s,b_s, and c_s appearing in the
+        secular Hamiltonian (Eq 25).
+        """
+        # Calculate matrices appearing in B7-B9
+        M = self._get_M_matrix()
         f2,f10 = get_secular_f2_and_f10(self.alpha)
         Smtrx = np.array([[f2,f10/2],[f10/2,f2]])
         # Coefficients a_s,b_s, and c_s defined in Eq. B11
@@ -546,3 +617,21 @@ class IntegrableResonanceModel():
         z1 = (f * Z - g * W) / X
         z2 = (f * W + g * Z) / X
         return z1,z2,Z
+
+def _solve_Psi_w_root_fn(pars, Z, W, z, psi, ZW_to_PhiPsi):
+    """
+    Convenience function for converting W and psi to Psi and w
+    by root-finding when solving for orbital elements. 
+    For used with scipy.root
+    """
+
+    Psi,w = pars
+    rtPsi = np.sqrt(Psi)
+    xcoord_root = rtPsi * np.cos(psi) - ZW_to_PhiPsi[1,0] * Z*np.cos(-1*z) - ZW_to_PhiPsi[1,1] * W * np.cos(-1*w)
+    ycoord_root = rtPsi * np.sin(psi) - ZW_to_PhiPsi[1,0] * Z*np.sin(-1*z) - ZW_to_PhiPsi[1,1] * W * np.sin(-1*w)
+    
+    dxdPsi = 0.5 * np.cos(psi) / rtPsi
+    dxdw = ZW_to_PhiPsi[1,1] * W * np.sin(w)
+    dydPsi = 0.5 * np.sin(psi) / rtPsi
+    dydw = ZW_to_PhiPsi[1,1] * W * np.cos(w)
+    return np.array([xcoord_root,ycoord_root]),np.array([[dxdPsi,dxdw],[dydPsi,dydw]])
