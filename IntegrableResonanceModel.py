@@ -448,27 +448,42 @@ class IntegrableResonanceModel():
         return self.m1 * mu2 / (mu1 + mu2) / Mstar
 
 
-    def dyvars_to_orbels(self, dyvars, P2=1, Q=0,l1 = 0, W = 0):
+    def dyvars_to_orbels(self, dyvars, P2=1, Q=0,l1 = 0, W = None, Psi = None, calA = None ):
         """
         Convert dynamical variables to orbital elements.
+        User can speficy the conserved quantity ${\cal A}$ directly through
+        the keyword argument `calA` or inderectly by setting either `W` or
+        `Psi`. If none are specified, W=0 is assumed by default.
 
         Arguemnts
         ---------
         dyvars : ndarray, shape (4,)
             Vector of the full phase space variables:
                 dyvars = [theta,theta*,J,J*]
+
         P2 : float, optional
             Period of outer planet. 
             Default is P2=1
+
         Q : float, optional
             Value of angular variable Q=j*l2 - (j-k) l1. 
             Default is Q=0
+
         l1 : float, optional
             Value of inner planet's mean longitude
             Default is l1=0
+
         W : float, optional
-            value of eccentricity-like variable W.
+            Value of eccentricity-like variable W.
             See Equation 13.
+
+        Psi : float, optional
+            Value of action-like variable Psi.
+            See Equation 15.
+
+        calA : float, optional
+            Value of conserved AMD-like quantity ${\cal A}$
+            See Equation 18.
 
         Returns
         -------
@@ -476,16 +491,16 @@ class IntegrableResonanceModel():
             Orbital elements for the pair of resonant planets.
             Format is:
                 [ [P1,e1,l1,w1] , [P2,e2,l2,w2] ]
-        Note
-        ----
-        Orbital elements are computed assuming W=0. 
         """
         theta,theta_star,J,Jstar = dyvars
         Delta = self.dJ_to_Delta * (J-Jstar)
         P1 = (self.j-self.k) * P2  / ( self.j *  (1+Delta) )
         l2 = np.mod( (Q + (self.j-self.k) * l1) / self.j  ,2*np.pi) 
         e1,w1,e2,w2 = self._ecc_vars_fn(dyvars,*self.extra_args)
-        if not np.isclose(W,0):
+
+        if W is not None and not np.isclose(W,0):
+            assert calA is None and Psi is None, "Can only specify one of 'W', 'calA', or 'Psi'"
+
             phi = theta - Q/self.k
             psi = -1 * theta_star - Q/self.k
             Phi = J 
@@ -524,9 +539,33 @@ class IntegrableResonanceModel():
             z2 = e2 * np.exp(1j * w2) + self.f * WexpIw  / np.sqrt(self.f**2 + self.g**2)
             e1,w1 = np.abs(z1),np.angle(z1)
             e2,w2 = np.abs(z2),np.angle(z2)
+
+        elif Psi is not None and not np.isclose(Psi,0):
+            assert calA is None and W is None, "Can only specify one of 'W', 'calA', or 'Psi'"
+            phi = theta - Q/self.k
+            psi = -1 * theta_star - Q/self.k
+            Phi = J 
+            # (Phi,Psi) to z1,z2
+            M = self._get_M_matrix()
+            z1,z2 = M.dot([np.sqrt(Phi) * np.exp(-1j * phi) , np.sqrt(Psi) * np.exp(-1j * psi)])
+            e1,w1 = np.abs(z1),np.angle(z1)
+            e2,w2 = np.abs(z2),np.angle(z2)
+
+        elif calA is not None and not np.isclose(calA,Jstar):
+            assert Psi is None and W is None, "Can only specify one of 'W', 'calA', or 'Psi'"
+            phi = theta - Q/self.k
+            psi = -1 * theta_star - Q/self.k
+            Phi = J 
+            Psi = calA - Jstar
+            # (Phi,Psi) to z1,z2
+            M = self._get_M_matrix()
+            z1,z2 = M.dot([np.sqrt(Phi) * np.exp(-1j * phi) , np.sqrt(Psi) * np.exp(-1j * psi)])
+            e1,w1 = np.abs(z1),np.angle(z1)
+            e2,w2 = np.abs(z2),np.angle(z2)
+
         return np.array( [ [P1,e1,l1,w1] , [P2,e2,l2,w2] ])
 
-    def dyvars_to_rebound_sim(self, dyvars, P2=1, Q=0,l1 = 0,W = 0):
+    def dyvars_to_rebound_sim(self, dyvars, P2=1, Q=0,l1 = 0, W = None, Psi = None, calA = None ):
         """
         Initialize a rebound simulation from a set of dynamical variables.
 
@@ -545,6 +584,18 @@ class IntegrableResonanceModel():
             Value of inner planet's mean longitude
             Default is l1=0
 
+        W : float, optional
+            Value of eccentricity-like variable W.
+            See Equation 13.
+
+        Psi : float, optional
+            Value of action-like variable Psi.
+            See Equation 15.
+
+        calA : float, optional
+            Value of conserved AMD-like quantity ${\cal A}$
+            See Equation 18.
+
         Returns
         -------
         rebound.Simulation object
@@ -553,7 +604,7 @@ class IntegrableResonanceModel():
         m2 = self.m2
         sim = rebound.Simulation()
         sim.add(m=1,hash="star")
-        orbels = self.dyvars_to_orbels(dyvars, P2 = P2, Q = Q, l1 = l1, W = W )
+        orbels = self.dyvars_to_orbels(dyvars, P2 = P2, Q = Q, l1 = l1, W = W,  Psi = Psi, calA = calA )
         for i,els in enumerate(orbels):
             P,e,l,w = els
             sim.add(m=[m1,m2][i],P=P,e=e,l=l,pomega=w,hash="planet{}".format(i))
