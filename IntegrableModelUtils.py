@@ -187,20 +187,20 @@ def calc_action_and_frequencies(y0, res_model, return_solution = False):
     the simply libration period. 
     
     The secular frequency is determined as follows:
-    the angle $\theta^*$ is related to the canonical 
+    the angle $\\theta^*$ is related to the canonical 
     action-angle variables $({\cal J},\zeta,I^*,\phi^*)$ by: 
     
     $$
-        \theta^* = \phi^* + \rho(\zeta; I^*,{\cal J})
+        \\theta^* = \phi^* + \\rho(\zeta; I^*,{\cal J})
     $$
     
-    where $\rho$ is a 2pi periodic function of $\zeta$.
+    where $\\rho$ is a 2pi periodic function of $\zeta$.
     Therefore, after one libration period,
     $$
-     \theta^* = \phi^*(0) + \frac{\Omega_{sec}}\times T
+     \\theta^* = \phi^*(0) + \\frac{\Omega_{sec}}\\times T
     $$
     where T is the libration period. The secular frequency
-    can then be determined from the change in \theta^* over
+    can then be determined from the change in \\theta^* over
     one libration period.
     
     Arguments
@@ -217,7 +217,7 @@ def calc_action_and_frequencies(y0, res_model, return_solution = False):
     Action : float
         Canonical action variable
         .. math::
-            {\cal J} = \frac{1}{2\pi} \oint J d\theta
+            {\\cal J} = \\frac{1}{2\pi} \oint J d\\theta
             
     Omega_res : float
         Frequency of (J,theta) degree of freedom.
