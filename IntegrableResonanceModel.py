@@ -149,7 +149,10 @@ def get_compiled_theano_functions(N_QUAD_PTS):
         ##########################
         
         if not DEBUG:
-            # Note that this may take a while...
+            # Note that compiling can take a while
+            #  so I've put a debugging switch here 
+            #  to skip evaluating these functions when
+            #  desired.
             H_fn = theano.function(
                 inputs=ins,
                 outputs=H,
