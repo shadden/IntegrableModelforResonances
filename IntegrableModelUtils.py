@@ -161,13 +161,13 @@ def _action_ydot_jac(t,y,res_model):
     jac[4,2] -= flow[0] / (2*np.pi)
     return jac
 
-def _action_event(t,y,J0):
+def _action_event(t,y,J0,sgn):
     """
     Determine when J returns to initial
     value, J0
     """
     if np.isclose(t,0):
-        return 1
+        return sgn
     J = y[2]
     return J - J0
 
@@ -252,9 +252,10 @@ def calc_action_and_frequencies(y0, res_model, return_solution = False):
     # ... otherwise do integration
     else:
         # Stop when J returns to J0 with the proper dJ/dt direction
-        eventfn = lambda t,y: _action_event(t,y,J0)
+        sgn = np.sign(res_model.flow_vec(y0)[2])
+        eventfn = lambda t,y: _action_event(t,y,J0,sgn)
         eventfn.terminal=True
-        eventfn.direction = np.sign(res_model.flow_vec(y0)[2])
+        eventfn.direction = sgn
         sol = solve_ivp(lambda t,y: _action_ydot(t,y,res_model),
                         t_span=(0,np.inf),
                         y0=np.append(y0,0),
