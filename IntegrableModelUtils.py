@@ -270,8 +270,9 @@ def calc_action_and_frequencies(y0, res_model, return_solution = False):
         Omega_res = 2 * np.pi / T 
         yfinal = sol.sol(T)
         theta_star_final = yfinal[1]
-        Omega_sec = theta_star_final / T
+        theta_star_initial = y0[1]
+        Omega_sec = (theta_star_final-theta_star_initial) / T
         action = yfinal[-1]
     if return_solution:
-        return Omega_res,Omega_sec,action,sol
+        return action,Omega_res,Omega_sec,sol
     return action,Omega_res,Omega_sec
