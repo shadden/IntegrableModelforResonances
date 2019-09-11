@@ -11,3 +11,5 @@ The code requries a few special python packages (in addition to numpy and scipy)
 All packages can be installed with:
 
   `pip install [PACKAGE]`
+
+Code reproducing Figure 7 of [CITE] is included in the `jupyter_examples` folder.
